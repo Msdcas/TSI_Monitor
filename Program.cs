@@ -1,9 +1,9 @@
 ﻿using OpenQA.Selenium;
-using OpenQA.Selenium.BiDi.Modules.Input;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using SeleniumExtras.WaitHelpers;
 using System.Data;
+using System.Text.Json;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
@@ -13,10 +13,11 @@ using Telegram.Bot.Types.ReplyMarkups;
 
 
 
-CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+CancellationTokenSource cancTokenSource = new CancellationTokenSource();
 
-
-await TBot.Main();
+//Task schedulerWatcherTask = SheduleManager.StartCheckAndExecSchedules();
+//schedulerWatcherTask.RunSynchronously();
+await TBot.Start();
 
 
 
@@ -31,44 +32,53 @@ static class SeleniumMonitorTSI
 
     public static string GetOpenedTickets()
     {
-        ChromeOptions chromeOptions = new ChromeOptions();
-        chromeOptions.AddArguments("--headless=new"); // comment out for testing
-        WebDriver driver = new ChromeDriver(chromeOptions);
-
-        driver.Navigate().GoToUrl(Url);
-        var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
-        var ipTextBox = wait.Until(ExpectedConditions.ElementExists(By.CssSelector(TableCssSelector)));
-        Thread.Sleep(2000);
-
-        IWebElement ticketTable = driver.FindElement(By.CssSelector(TableCssSelector));
+        WebDriver driver = null;
         DataTable TicketsDTable = InitializeTable();
-
-        if (ticketTable == null) //return MsgToDataRow(TicketsDTable, "Ошибка получения таблицы");
-            return "Ошибка получения таблицы";
-
-        var ticketRows = ticketTable.FindElements(By.TagName("tr"));
-
-        if (ticketRows.Count == 0) //return MsgToDataRow(TicketsDTable, "Таблица получена, но была пуста");
-            return "Нет открытых задач TSI";
-
-        foreach (var trow in ticketRows.Skip(1))
+        try
         {
-            var text = trow.Text.Replace("Светашов Евгений Викторович", "РИТ").Replace("Зверев Михаил Дмитриевич", "Админ");
-            var param = text.Split('\n');
+            ChromeOptions chromeOptions = new ChromeOptions();
+            chromeOptions.AddArguments("--headless=new"); // comment out for testing
+            driver = new ChromeDriver(chromeOptions);
 
-            DataRow row = TicketsDTable.NewRow();
-            row[0] = param[0]; // code
-            row[1] = param[1]; // theme
-            row[2] = param[2]; // status + assigner
-            row[3] = param[3]; // timeout
-            row[4] = param[4]; // creator
+            driver.Navigate().GoToUrl(Url);
+            var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+            var ipTextBox = wait.Until(ExpectedConditions.ElementExists(By.CssSelector(TableCssSelector)));
+            Thread.Sleep(2000);
 
-            TicketsDTable.Rows.Add(row);
+            IWebElement ticketTable = driver.FindElement(By.CssSelector(TableCssSelector));
+
+            if (ticketTable == null)
+                return "Ошибка получения таблицы";
+
+            var ticketRows = ticketTable.FindElements(By.TagName("tr"));
+
+            if (ticketRows.Count == 0)
+                return "Нет открытых задач TSI";
+
+            foreach (var trow in ticketRows.Skip(1))
+            {
+                var text = trow.Text.Replace("Светашов Евгений Викторович", "РИТ").Replace("Зверев Михаил Дмитриевич", "Админ");
+                var param = text.Split('\n');
+
+                DataRow row = TicketsDTable.NewRow();
+                row[0] = param[0]; // code
+                row[1] = param[1]; // theme
+                row[2] = param[2]; // status + assigner
+                row[3] = param[3]; // timeout
+                row[4] = param[4]; // creator
+
+                TicketsDTable.Rows.Add(row);
+            }
         }
-
-        driver.Close();
-        driver.Quit();
-
+        catch (Exception ex)
+        {
+            return ex.ToString();
+        }
+        finally
+        {
+            driver.Close();
+            driver.Quit();
+        }
         return ConvertToString(TicketsDTable);
     }
 
@@ -121,10 +131,10 @@ class TBot
     private const string AdminChatId = "6750792041";
     private static List<string> WhiteChatsId = new List<string> { "6750792041", "-969152017", "1112277578" };
 
-    private const string showCurrentChatSchedules = "Показать текущее расписание";
+    private const string showCurrentChatSchedules = "Показать расписание для этого чата";
     private const string cancelChatSchedules = "Отменить рассылку в этот чат";
-    private const string scheduleChatForPersona = "Сегодня каждый час с 08:00 по 19:00";
-    private const string scheduleChatForWeekends = "Еженедельно ПТ_21:00, СБ_ВС_09:00,20:00";
+    private const string scheduleChatForPersona = "Выгружать сегодня каждый час с 08:00 по 19:00";
+    private const string scheduleChatForWeekends = "Выгружать еженедельно ПТ_21:00, СБ_ВС_09:00,20:00";
 
     private static ITelegramBotClient _botClient;
     private static ReceiverOptions _receiverOptions;
@@ -134,14 +144,23 @@ class TBot
     {
             new InlineKeyboardButton[]
             {
-                InlineKeyboardButton.WithCallbackData(showCurrentChatSchedules),
-                InlineKeyboardButton.WithCallbackData(cancelChatSchedules),
-                InlineKeyboardButton.WithCallbackData(scheduleChatForPersona),
-                InlineKeyboardButton.WithCallbackData(scheduleChatForWeekends),
+                InlineKeyboardButton.WithCallbackData(showCurrentChatSchedules)
+            },
+            new InlineKeyboardButton[]
+            {
+                InlineKeyboardButton.WithCallbackData(cancelChatSchedules)
+            },
+            new InlineKeyboardButton[]
+            {
+                InlineKeyboardButton.WithCallbackData(scheduleChatForPersona)
+            },
+            new InlineKeyboardButton[]
+            {
+                InlineKeyboardButton.WithCallbackData(scheduleChatForWeekends)
             }
     });
 
-    public static async Task Main()
+    public static async Task Start()
     {
         _botClient = new TelegramBotClient(token);
         _receiverOptions = new ReceiverOptions // Также присваем значение настройкам бота
@@ -159,7 +178,7 @@ class TBot
         _botClient.StartReceiving(UpdateHandler, ErrorHandler, _receiverOptions, cancellation.Token);
 
         var me = await _botClient.GetMe();
-        Console.WriteLine($"{me.FirstName} запущен!");
+        Console.WriteLine($"Бот {me.FirstName} запущен!");
 
         await Task.Delay(-1); // Устанавливаем бесконечную задержку, чтобы наш бот работал постоянно
     }
@@ -238,14 +257,15 @@ class TBot
 
             case scheduleChatForWeekends: // здесь идет добавление расписания для чата
                 temp = new Schedule(chat.Id, scheduleChatForWeekends, true, Schedule.ScheduleTemplateWeekends());
-                temp.Operation = SeleniumMonitorTSI.GetOpenedTickets;
+                temp.ScheduleOperation = SeleniumMonitorTSI.GetOpenedTickets;
                 answ = SheduleManager.AddSchedules(temp);
                 await botClient.SendMessage(chat.Id, answ);
                 break;
 
             case scheduleChatForPersona: // здесь идет добавление расписания для чата
-                temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateOneDay());
-                temp.Operation = SeleniumMonitorTSI.GetOpenedTickets;
+                //temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateOneDay());
+                temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateTest());
+                temp.ScheduleOperation = SeleniumMonitorTSI.GetOpenedTickets;
                 answ = SheduleManager.AddSchedules(temp);
                 await botClient.SendMessage(chat.Id, answ);
                 break;
@@ -364,12 +384,34 @@ class Schedule
         return template;
     }
 
+    public static List<ScheduleTimes> ScheduleTemplateTest()
+    {
+        List<ScheduleTimes> template = new List<ScheduleTimes>();
+        ScheduleTimes temp = new ScheduleTimes();
+
+        temp.DayOfWeek = DateTime.Now.DayOfWeek;
+        var times = new List<TimeSpan>();
+
+        for (int i = DateTime.Now.Hour; i < 21; i++)
+        {
+            for (int j = 0; j < 60; j+=5)
+                times.Add(new TimeSpan(i, j, 00)); //hour, min, seconds
+        }
+
+        template.Add(temp);
+
+        return template;
+    }
 }
 
 static class SheduleManager
 {
+    private static string BasicFolder = Environment.CurrentDirectory;
+    private static string ScheduleSavedFileName = "WorkSchedulesList.json";
+    private static string ScheduleSavedFullFilePath = Path.Combine(BasicFolder, ScheduleSavedFileName);
+
     public static Queue<Schedule> SchedulesToImmediatlyOperate;
-    private static List<Schedule> Schedules = new();
+    private static List<Schedule> Schedules = LoadSchedules();
 
     public static string AddSchedules(Schedule schedule)
     {
@@ -437,9 +479,9 @@ static class SheduleManager
         }
     }
 
-    public static async void StartCheckAndExecSchedules(CancellationToken cancellation)
+    public static async Task StartCheckAndExecSchedules()
     {
-        while (cancellation.IsCancellationRequested)
+        while (true)
         {
             while(SchedulesToImmediatlyOperate.Count > 0)
             {
@@ -448,8 +490,29 @@ static class SheduleManager
                 string answ = sched.ScheduleOperation.Invoke();
                 await TBot.SendMessage(sched.ChatId, answ);
             }
-            Thread.Sleep(60 * 1000);
+
+            SaveSchedules(Schedules);
+            await Task.Delay(60 * 1000);
         }
+    }
+
+    public static void SaveSchedules(List<Schedule> schedules)
+    {
+        var scheduleList = new List<Schedule>(schedules);
+        var json = JsonSerializer.Serialize(scheduleList);
+        File.WriteAllText(BasicFolder, json);
+    }
+
+    private static List<Schedule> LoadSchedules()
+    {
+        if (!File.Exists(ScheduleSavedFullFilePath))
+        {
+            return new List<Schedule>();
+        }
+
+        var json = File.ReadAllText(ScheduleSavedFullFilePath);
+        var scheduleList = JsonSerializer.Deserialize<List<Schedule>>(json);
+        return new List<Schedule>(scheduleList);
     }
 
 }
