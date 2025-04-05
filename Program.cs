@@ -30,6 +30,7 @@ await TBot.Main();
     // у админа есть меню для управления чатами + кнопка для останова бота
     // при появлении чата выходит уведомление админу на разрешение учавствовать в чате
     // выгрузка в sqlite белого списка чатов и расписания
+    //логирование истории переписки в sqlite
     //брать базовые настройки из файла конфига (токен бота и ид админа)
 
 //проследить цепочку асинхронных вызовов с линии бота и монитора очереди
@@ -40,7 +41,7 @@ static class SeleniumMonitorTSI
     private const string Url = "https://jira.puls.ru/secure/Dashboard.jspa?selectPageId=15003";
     private const string TableCssSelector = "#qrf-table-view-23015 > table";
 
-    public static string GetOpenedTickets()
+    public static string GetOpenTSITickets()
     {
         WebDriver driver = null;
         DataTable TicketsDTable = InitializeTable();
@@ -283,30 +284,34 @@ class TBot
             //showCurrentChatSchedules
             case "mbut1":
                 answ = SheduleManager.GetChatSchedules(chat.Id);
-                await botClient.AnswerCallbackQuery(callback.Id, answ, cacheTime: 1500);
+                //Console.WriteLine($"answ after mbut1: {answ}");
+                await botClient.AnswerCallbackQuery(callback.Id, answ);
                 break;
 
             //cancelChatSchedules
             case "mbut2":
                 answ = SheduleManager.DeleteChatShedules(chat.Id);
-                await botClient.AnswerCallbackQuery(callback.Id, answ, cacheTime: 1500);
+                //Console.WriteLine($"answ after mbut2: {answ}");
+                await botClient.AnswerCallbackQuery(callback.Id, answ);
                 break;
 
             //scheduleChatForWeekends
             case "mbut3":
                 temp = new Schedule(chat.Id, scheduleChatForWeekends, true, Schedule.ScheduleTemplateWeekends());
-                temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenedTickets;
+                temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenTSITickets;
                 answ = SheduleManager.AddSchedules(temp);
-                await botClient.AnswerCallbackQuery(callback.Id, answ, cacheTime: 1500);
+                //Console.WriteLine($"answ after mbut3: {answ}");
+                await botClient.AnswerCallbackQuery(callback.Id, answ);
                 break;
 
             //scheduleChatForPersona
             case "mbut4":
                 temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateOneDay());
-                temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateTest());
-                temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenedTickets;
+                //temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateTest());
+                temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenTSITickets;
                 answ = SheduleManager.AddSchedules(temp);
-                await botClient.AnswerCallbackQuery(callback.Id, answ, cacheTime: 1500);
+                //Console.WriteLine($"answ after mbut4: {answ}");
+                await botClient.AnswerCallbackQuery(callback.Id, answ);
                 break;
 
             default:
