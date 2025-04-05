@@ -1,7 +1,10 @@
 ﻿using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.DevTools.V131.Debugger;
 using OpenQA.Selenium.Support.UI;
 using SeleniumExtras.WaitHelpers;
+using System;
+using System.Collections.Concurrent;
 using System.Data;
 using System.Text.Json;
 using Telegram.Bot;
@@ -17,14 +20,19 @@ CancellationTokenSource cancTokenSource = new CancellationTokenSource();
 
 //Task schedulerWatcherTask = SheduleManager.StartCheckAndExecSchedules();
 //schedulerWatcherTask.RunSynchronously();
-await TBot.Start();
+await TBot.Main();
 
 
-
+// вывод в прод как самостоятельный продукт:
+    // при первом запуске только админ в белом списке
+    // у админа есть меню для управления чатами + кнопка для останова бота
+    // при появлении чата выходит уведомление админу на разрешение учавствовать в чате
+    // выгрузка в sqlite белого списка чатов и расписания
+    //брать базовые настройки из файла конфига (токен бота и ид админа)
 
 //проследить цепочку асинхронных вызовов с линии бота и монитора очереди
 //добавить кнопку, получить список немедленно
-//выгружать расписание в файл, чтобы при запуске восстановить его
+// + выгружать расписание в файл, чтобы при запуске восстановить его
 static class SeleniumMonitorTSI
 {
     private const string Url = "https://jira.puls.ru/secure/Dashboard.jspa?selectPageId=15003";
@@ -128,39 +136,39 @@ static class SeleniumMonitorTSI
 class TBot
 {
     private const string token = "7768609296:AAGJR_9WJv4rJQ8n6W_hHv3zzGLignWNx_A";
-    private const string AdminChatId = "6750792041";
-    private static List<string> WhiteChatsId = new List<string> { "6750792041", "-969152017", "1112277578" };
+    private const long AdminChatId = 6750792041;
+    private static List<long> WhiteChatsId = new() { 6750792041, 351907910, - 969152017, 1112277578 };
 
-    private const string showCurrentChatSchedules = "Показать расписание для этого чата";
-    private const string cancelChatSchedules = "Отменить рассылку в этот чат";
-    private const string scheduleChatForPersona = "Выгружать сегодня каждый час с 08:00 по 19:00";
-    private const string scheduleChatForWeekends = "Выгружать еженедельно ПТ_21:00, СБ_ВС_09:00,20:00";
+    private const string showCurrentChatSchedules = "Показать расписание для этого чата";               //mbut1
+    private const string cancelChatSchedules = "Отменить рассылку в этот чат";                          //mbut2
+    private const string scheduleChatForPersona = "Выгружать сегодня каждый час с 08:00 по 19:00";      //mbut3
+    private const string scheduleChatForWeekends = "Выгружать еженедельно ПТ_21:00, СБ_ВС_09:00,20:00"; //mbut4
 
     private static ITelegramBotClient _botClient;
     private static ReceiverOptions _receiverOptions;
 
-    static InlineKeyboardMarkup inlineKeyboard = new InlineKeyboardMarkup(
+    static InlineKeyboardMarkup mainInlineKeyboard = new InlineKeyboardMarkup(
     new List<InlineKeyboardButton[]>()
     {
             new InlineKeyboardButton[]
             {
-                InlineKeyboardButton.WithCallbackData(showCurrentChatSchedules)
+                InlineKeyboardButton.WithCallbackData(showCurrentChatSchedules, "mbut1")
             },
             new InlineKeyboardButton[]
             {
-                InlineKeyboardButton.WithCallbackData(cancelChatSchedules)
-            },
-            new InlineKeyboardButton[]
-            {
-                InlineKeyboardButton.WithCallbackData(scheduleChatForPersona)
-            },
-            new InlineKeyboardButton[]
-            {
-                InlineKeyboardButton.WithCallbackData(scheduleChatForWeekends)
+                InlineKeyboardButton.WithCallbackData(cancelChatSchedules, "mbut2")
             }
+            //new InlineKeyboardButton[]
+            //{
+            //    InlineKeyboardButton.WithCallbackData(scheduleChatForPersona, "mbut3")
+            //},
+            //new InlineKeyboardButton[]
+            //{
+            //    InlineKeyboardButton.WithCallbackData(scheduleChatForWeekends, "mbut4")
+            //}
     });
 
-    public static async Task Start()
+    public static async Task Main()
     {
         _botClient = new TelegramBotClient(token);
         _receiverOptions = new ReceiverOptions // Также присваем значение настройкам бота
@@ -203,19 +211,39 @@ class TBot
     {
         try
         {
-            if (update.Type == UpdateType.Message)
+            //if (!IsChatIdInWhiteList(update.Message.Chat.Id))
+            //{
+            //    await botClient.SendMessage(update.Message.Chat.Id, "You are not on the white list");
+            //    await botClient.SendMessage(AdminChatId, $"Новый чат, id={update.Message.From}, msg={update.Message.Text}");
+            //    //Console.WriteLine($"Drop msg from chat_id={update.Message.Id.ToString()}");
+            //    return;
+            //}
+            Console.WriteLine($"msg={update.Message.Text}, chat_id={update.Message.Chat.Id}");
+
+            switch (update.Type)
             {
-                var message = update.Message;
-                var user = message.From;
+                case UpdateType.Message:
+                    switch (update.Message.Type)
+                    {
+                        case MessageType.Text:
+                            await HandleTextMessage(botClient, update, update.Message, update.Message.Chat);
+                            break;
+                    }
+                    break;
 
-                //PutMsgToUserLogFile(user.Id, message.Text);
-                //Console.WriteLine(user.Id + "\t" + message.Text);
+                case UpdateType.CallbackQuery:
+                    var callbackQuery = update.CallbackQuery;
+                    var user = callbackQuery.From;
+                    var chat = callbackQuery.Message.Chat;
+                    Console.WriteLine($"{user.FirstName} ({user.Id}) нажал на кнопку: {callbackQuery.Data}");
+                    //Console.WriteLine("fork CallbackQuery");
+                    //Console.WriteLine($"Received callback data: {update.CallbackQuery.Data}");
 
-                if (message.Type == MessageType.Text)
-                {
-                    await HandleTextMessage(botClient, message, message.Chat);
-                }
+                    if (update.CallbackQuery != null)
+                        await HandleCallbackQuery(botClient, update, callbackQuery.Data, chat);
+                    break;
             }
+
         }
         catch (Exception ex)
         {
@@ -223,17 +251,8 @@ class TBot
         }
     }
 
-    private static async Task HandleTextMessage(ITelegramBotClient botClient, Message message, Chat chat)
+    private static async Task HandleTextMessage(ITelegramBotClient botClient, Update update, Message message, Chat chat)
     {
-        if (!IsChatIdInWhiteList(chat.Id.ToString()))
-        {
-            await botClient.SendMessage(chat.Id, "You are not on the white list");
-            await botClient.SendMessage(AdminChatId, $"Новый чат, id={message.From}, msg={message.Text}");
-            return;
-        }
-
-        string answ = null;
-        Schedule temp;
         switch (message.Text)
         {
             case "/start":
@@ -242,36 +261,52 @@ class TBot
                     "Приветсвую, здесь вы можете получать список открытых задач TSI для вашего РК",
                     ParseMode.None, 
                     null,
-                    inlineKeyboard);
+                    replyMarkup: mainInlineKeyboard);
                 break;
 
-            case showCurrentChatSchedules:
-                answ = SheduleManager.GetChatSchedules(chat.Id);
-                await botClient.SendMessage(chat.Id, answ);
+            case "mbut1": //showCurrentChatSchedules
+                string answ = null;
+                Schedule temp;
+                //answ = await SheduleManager.GetChatSchedules(chat.Id);
+                await botClient.SendMessage(chat.Id, "mbut1");
                 break;
 
-            case cancelChatSchedules:
-                answ = SheduleManager.DeleteChatShedules(chat.Id);
-                await botClient.SendMessage(chat.Id, answ);
+            default:
+                await botClient.SendMessage(chat.Id, "Для этой команды нет обработчика.\nВы можете оставить предложение о функционале в меню Сервис");
+                break;
+        }
+    }
+
+    private static async Task HandleCallbackQuery(ITelegramBotClient botClient, Update update, string message, Chat chat)
+    {
+        string answ = null;
+        Schedule temp;
+        switch (message)
+        {
+            //mainInlineKeyboard operation and answers
+
+
+            case "mbut2": //cancelChatSchedules
+                //answ = await SheduleManager.DeleteChatShedules(chat.Id);
+                await botClient.SendMessage(chat.Id, "mbut2");
                 break;
 
-            case scheduleChatForWeekends: // здесь идет добавление расписания для чата
+            case "mbut3": //scheduleChatForWeekends
                 temp = new Schedule(chat.Id, scheduleChatForWeekends, true, Schedule.ScheduleTemplateWeekends());
-                temp.ScheduleOperation = SeleniumMonitorTSI.GetOpenedTickets;
-                answ = SheduleManager.AddSchedules(temp);
+                temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenedTickets;
+                answ = await SheduleManager.AddSchedules(temp);
                 await botClient.SendMessage(chat.Id, answ);
                 break;
 
-            case scheduleChatForPersona: // здесь идет добавление расписания для чата
+            case "mbut4": //scheduleChatForPersona
                 //temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateOneDay());
                 temp = new Schedule(chat.Id, scheduleChatForPersona, true, Schedule.ScheduleTemplateTest());
-                temp.ScheduleOperation = SeleniumMonitorTSI.GetOpenedTickets;
-                answ = SheduleManager.AddSchedules(temp);
+                temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenedTickets;
+                answ = await SheduleManager.AddSchedules(temp);
                 await botClient.SendMessage(chat.Id, answ);
                 break;
 
             default:
-                //await botClient.SendMessage(chat.Id, "Для этой команды нет обработчика.\nВы можете оставить предложение о функционале в меню Сервис");
                 break;
         }
     }
@@ -290,8 +325,10 @@ class TBot
         return Task.CompletedTask;
     }
 
-    private static bool IsChatIdInWhiteList(string chatId)
+    private static bool IsChatIdInWhiteList(long chatId)
     {
+        if (WhiteChatsId.Count == 0) return false;
+
         if (WhiteChatsId.Contains(chatId))
             return true;
         else return false;
@@ -314,7 +351,7 @@ class Schedule
     public List<ScheduleTimes> ScheduleDays;
 
     public delegate string Operation();
-    public Operation ScheduleOperation;
+    public Operation ExecuteOperation;
 
     public Schedule(long chatId, string description, bool IsEveryWeek, ScheduleTimes schedule)
     {
@@ -410,10 +447,11 @@ static class SheduleManager
     private static string ScheduleSavedFileName = "WorkSchedulesList.json";
     private static string ScheduleSavedFullFilePath = Path.Combine(BasicFolder, ScheduleSavedFileName);
 
+    private static readonly object _lockSched = new object();
     public static Queue<Schedule> SchedulesToImmediatlyOperate;
     private static List<Schedule> Schedules = LoadSchedules();
 
-    public static string AddSchedules(Schedule schedule)
+    public static async Task<string> AddSchedules(Schedule schedule)
     {
         var isExist = Schedules.Where(x => x.ChatId == schedule.ChatId && x.Description == schedule.Description).Count() != 0;
         if (isExist) return "Такое распирасание для этого чата уже существует";
@@ -422,11 +460,14 @@ static class SheduleManager
         return "Распирасание создано";
     }
 
-    public static string GetChatSchedules(long chatId)
+    public static async Task<string> GetChatSchedules(long chatId)
     {
         string answ = "Расписаний не найдено";
 
-        var matchedSchedules = Schedules.Where(x => x.ChatId == chatId).ToList();
+        List<Schedule> matchedSchedules;
+        lock (_lockSched)
+            matchedSchedules = Schedules.Where(x => x.ChatId == chatId).ToList();
+
         if (matchedSchedules.Any())
         {
             answ = "";
@@ -436,47 +477,51 @@ static class SheduleManager
         return answ;
     }
 
-    public static string DeleteChatShedules(long chatId)
+    public static async Task<string> DeleteChatShedules(long chatId)
     {
         int count = 0;
-        foreach (Schedule sched in Schedules)
-        {
-            if (sched.ChatId == chatId)
+
+        lock (_lockSched)
+            foreach (Schedule sched in Schedules)
             {
-                Schedules.Remove(sched);
-                count++;
+                if (sched.ChatId == chatId)
+                {
+                    Schedules.Remove(sched);
+                    count++;
+                }
             }
-        }
         return $"Удалено {count} расписаний";
     }
 
-    public static void CheckAndRemoveOldSchedules()
+    public static async Task CheckAndRemoveOldSchedules()
     {
         var personalSchedules = Schedules.Where(x => x.IsEveryWeek == false).ToList();
 
-        foreach (Schedule sched in personalSchedules)
-        {
-            if (DateTime.Now - sched.CreationDate > TimeSpan.FromDays(1))
-                Schedules.Remove(sched);
-        }
+        lock (_lockSched)
+            foreach (Schedule sched in personalSchedules)
+            {
+                if (DateTime.Now - sched.CreationDate > TimeSpan.FromDays(1))
+                    Schedules.Remove(sched);
+            }
     }
 
-    private static void PushToOperateQueue()
+    private static async Task PushToOperateQueue()
     {
-        foreach (Schedule sched in Schedules)
-        {
-            var schedDays = sched.ScheduleDays;
-            foreach (ScheduleTimes day in schedDays)
+        lock (_lockSched)
+            foreach (Schedule sched in Schedules)
             {
-                if (day.DayOfWeek == DateTime.Now.DayOfWeek)
-                    foreach (TimeSpan dayTimes in day.Times)
-                    {
-                        var timeToExec = DateTime.Today + dayTimes;
-                        if (timeToExec - DateTime.Now < TimeSpan.FromSeconds(90))
-                            SchedulesToImmediatlyOperate.Enqueue(sched);
-                    }       
+                var schedDays = sched.ScheduleDays;
+                foreach (ScheduleTimes day in schedDays)
+                {
+                    if (day.DayOfWeek == DateTime.Now.DayOfWeek)
+                        foreach (TimeSpan dayTimes in day.Times)
+                        {
+                            var timeToExec = DateTime.Today + dayTimes;
+                            if (timeToExec - DateTime.Now < TimeSpan.FromSeconds(90))
+                                SchedulesToImmediatlyOperate.Enqueue(sched);
+                        }       
+                }
             }
-        }
     }
 
     public static async Task StartCheckAndExecSchedules()
@@ -487,7 +532,7 @@ static class SheduleManager
             {
                 var sched = SchedulesToImmediatlyOperate.Dequeue();
 
-                string answ = sched.ScheduleOperation.Invoke();
+                string answ = sched.ExecuteOperation.Invoke();
                 await TBot.SendMessage(sched.ChatId, answ);
             }
 
@@ -498,8 +543,10 @@ static class SheduleManager
 
     public static void SaveSchedules(List<Schedule> schedules)
     {
-        var scheduleList = new List<Schedule>(schedules);
-        var json = JsonSerializer.Serialize(scheduleList);
+        string json;
+
+        lock (_lockSched)
+            json = JsonSerializer.Serialize(schedules);
         File.WriteAllText(BasicFolder, json);
     }
 
