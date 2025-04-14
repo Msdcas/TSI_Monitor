@@ -1,14 +1,9 @@
 ﻿using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
-using OpenQA.Selenium.DevTools.V131.CSS;
-using OpenQA.Selenium.DevTools.V131.Debugger;
 using OpenQA.Selenium.Support.UI;
 using SeleniumExtras.WaitHelpers;
-using System;
-using System.Collections.Concurrent;
 using System.Data;
 using System.Text.Json;
-using System.Threading;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
@@ -17,7 +12,7 @@ using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
 
-Console.WriteLine("Enter 'stop' for stopped the bot\n\n");
+Console.WriteLine("Enter 'stop' for stopped the bot and scheduler\n\n");
 
 CancellationTokenSource cancTokenSource = new CancellationTokenSource();
 var task = Task.Run(() => SheduleManager.StartCheckAndExecSchedules(cancTokenSource.Token));
@@ -30,12 +25,14 @@ while (!cancTokenSource.IsCancellationRequested)
     {
         cancTokenSource.Cancel();
         TBot.Stop();
-        break;
     }
 }
 
-
-//нужно проводить тесты с планировщиком расписаний
+// добавить сохранение расписания при остановке бота
+//добавить запрос в консоль о длине немедленной очереди, кол-ве активных расписаний
+// если польз удаляет расписание, то удалять его из немедленной очереди
+//добавить canceltoken в selenium
+//нужно проводить тесты с планировщиком расписаний - тесты проведены, работает почти стабильно
 
 //переделать методы класса менеджера в асинхронные
 //обработка ошибок, вывод стека вызовов
@@ -62,8 +59,13 @@ static class SeleniumMonitorTSI
         try
         {
             ChromeOptions chromeOptions = new ChromeOptions();
+            ChromeDriverService driverService = ChromeDriverService.CreateDefaultService();
+
+            driverService.HideCommandPromptWindow = true;
             chromeOptions.AddArguments("--headless=new"); // comment out for testing
-            driver = new ChromeDriver(chromeOptions);
+            
+            driver = new ChromeDriver(driverService, chromeOptions);
+
 
             driver.Navigate().GoToUrl(Url);
             var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
@@ -77,13 +79,15 @@ static class SeleniumMonitorTSI
 
             var ticketRows = ticketTable.FindElements(By.TagName("tr"));
 
-            if (ticketRows.Count == 0)
-                return "Нет открытых задач TSI";
-
             foreach (var trow in ticketRows.Skip(1))
             {
                 var text = trow.Text.Replace("Светашов Евгений Викторович", "РИТ").Replace("Зверев Михаил Дмитриевич", "Админ");
                 var param = text.Split('\n');
+
+                if (text == "No issues found.")
+                {
+                    return "Нет открытых задач TSI";
+                }
 
                 DataRow row = TicketsDTable.NewRow();
                 row[0] = param[0]; // code
@@ -156,10 +160,11 @@ class TBot
     private const long AdminChatId = 6750792041; //351907910
     private static List<long> WhiteChatsId = new() { 6750792041, - 969152017, 1112277578 };
 
-    private const string showCurrentChatSchedules = "Показать расписание для этого чата";               //mbut1
-    private const string cancelChatSchedules = "Отменить рассылку в этот чат";                          //mbut2
-    private const string scheduleEveryHour = "Выгружать сегодня каждый час с 08:00 по 19:00";      //mbut3
-    private const string scheduleOnlyWeekends = "Выгружать еженедельно ПТ_21:00, СБ_ВС_09:00,20:00"; //mbut4
+    private const string showCurrentChatSchedules = "Показать расписание для этого чата";                //mbut1
+    private const string cancelChatSchedules = "Отменить рассылку в этот чат";                           //mbut2
+    private const string scheduleEveryHour = "Выгружать сегодня каждый час с 08:00 по 19:00";            //mbut3
+    private const string scheduleOnlyWeekends = "Выгружать еженедельно ПТ_21:00, СБ_ВС_09:00,20:00";     //mbut4
+    private const string scheduleGetImmediatly = "Получить список открытых TSI немедленно";              //mbut5
 
     private static ITelegramBotClient _botClient;
     private static ReceiverOptions _receiverOptions;
@@ -182,6 +187,10 @@ class TBot
             new InlineKeyboardButton[]
             {
                 InlineKeyboardButton.WithCallbackData(scheduleOnlyWeekends, "mbut4")
+            },
+            new InlineKeyboardButton[]
+            {
+                InlineKeyboardButton.WithCallbackData(scheduleGetImmediatly, "mbut5")
             }
     });
 
@@ -210,13 +219,13 @@ class TBot
         _botClient.StartReceiving(UpdateHandler, ErrorHandler, _receiverOptions, cancellation);
 
         var me = await _botClient.GetMe();
-        Console.WriteLine($"Bot {me.FirstName} is stARted");
+        Console.WriteLine($"Bot {me.FirstName} is stARted", Console.ForegroundColor = ConsoleColor.Green);
 
         //await Task.Delay(-1); // Устанавливаем бесконечную задержку, чтобы наш бот работал постоянно
         await tcs.Task;
         tcs = null;
 
-        Console.WriteLine($"Bot {me.FirstName} is stOPped");
+        Console.WriteLine($"Bot {me.FirstName} is stOPped", Console.ForegroundColor = ConsoleColor.Red);
     }
 
     public static void Stop()
@@ -333,17 +342,23 @@ class TBot
             case "mbut3":
                 temp = new Schedule(chat.Id, scheduleEveryHour, true, Schedule.ScheduleTemplateOneDay());
                 temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenTSITickets;
-                answ = SheduleManager.AddSchedules(temp);
+                answ = "Ежечасное расписание " + SheduleManager.AddSchedules(temp);
                 await botClient.AnswerCallbackQuery(callback.Id, answ);
                 break;
 
             //scheduleChatForWeekends
             case "mbut4":
-                //temp = new Schedule(chat.Id, scheduleOnlyWeekends, true, Schedule.ScheduleTemplateWeekends());
-                temp = new Schedule(chat.Id, "test_schedule", true, Schedule.ScheduleTemplateTest());
+                temp = new Schedule(chat.Id, scheduleOnlyWeekends, true, Schedule.ScheduleTemplateWeekends());
+                //temp = new Schedule(chat.Id, "test_schedule", true, Schedule.ScheduleTemplateTest());
                 temp.ExecuteOperation = SeleniumMonitorTSI.GetOpenTSITickets;
-                answ = SheduleManager.AddSchedules(temp);
+                answ = "Еженедельное расписание " + SheduleManager.AddSchedules(temp);
                 await botClient.AnswerCallbackQuery(callback.Id, answ);
+                break;
+
+            //scheduleGetImmediatly
+            case "mbut5":
+                await botClient.AnswerCallbackQuery(callback.Id, SeleniumMonitorTSI.GetOpenTSITickets());
+                //await botClient.SendMessage(chat.Id, answ);
                 break;
 
             default:
@@ -425,7 +440,9 @@ class Schedule
         var times = new List<TimeSpan>();
         times.Add(new TimeSpan(21, 00, 00)); //hour, min, seconds
 
+        temp.Times = times;
         template.Add(temp);
+
         temp = new ScheduleTimes();
 
         temp.DayOfWeek = DayOfWeek.Saturday;
@@ -433,13 +450,18 @@ class Schedule
         times.Add(new TimeSpan(09, 00, 00));
         times.Add(new TimeSpan(20, 00, 00));
 
+        temp.Times = times;
         template.Add(temp);
+
         temp = new ScheduleTimes();
 
         temp.DayOfWeek = DayOfWeek.Sunday;
         times = new List<TimeSpan>();
         times.Add(new TimeSpan(09, 00, 00));
         times.Add(new TimeSpan(20, 00, 00));
+
+        temp.Times = times;
+        template.Add(temp);
 
         return template;
     }
@@ -456,6 +478,7 @@ class Schedule
         {
             times.Add(new TimeSpan(i, 00, 00)); //hour, min, seconds
         }
+        temp.Times = times;
 
         template.Add(temp);
 
@@ -472,9 +495,10 @@ class Schedule
 
         for (int i = DateTime.Now.Hour; i < 21; i++)
         {
-            for (int j = 0; j < 60; j+=4)
+            for (int j = 0; j < 60; j += 4)
                 times.Add(new TimeSpan(i, j, 00)); //hour, min, seconds
         }
+        temp.Times = times;
 
         template.Add(temp);
 
@@ -495,10 +519,10 @@ static class SheduleManager
     public static string AddSchedules(Schedule schedule)
     {
         var isExist = _Schedules.Where(x => x.ChatId == schedule.ChatId && x.Description == schedule.Description).Count() != 0;
-        if (isExist) return "Такое распирасание для этого чата уже существует";
+        if (isExist) return "уже существует";
 
         _Schedules.Add(schedule);
-        return "Распирасание создано";
+        return "создано";
     }
 
     public static string GetChatSchedules(long chatId)
@@ -543,7 +567,7 @@ static class SheduleManager
     }
 
 
-    public static void CheckAndRemoveOldSchedules()
+    private static void CheckAndRemoveOldSchedules()
     {
         var personalSchedules = _Schedules.Where(x => x.IsEveryWeek == false).ToList();
         List<Schedule> schedulesToRemove = new List<Schedule>();
@@ -572,13 +596,16 @@ static class SheduleManager
                 foreach (ScheduleTimes day in schedDays)
                 {
                     if (day.DayOfWeek == DateTime.Now.DayOfWeek)
-                        foreach (TimeSpan dayTimes in day.Times)                                    //Object reference not set to an instance of an object.
+                        foreach (TimeSpan dayTimes in day.Times)
                         {
                             var timeToExec = DateTime.Today + dayTimes;
-                            if (timeToExec - DateTime.Now < TimeSpan.FromSeconds(90))
+                            var difference = DateTime.Now.Subtract(timeToExec).TotalSeconds;
+                            if (difference < 80 && difference > 0)
                             {
                                 SchedulesToImmediatlyOperate.Enqueue(sched);
-                                Console.WriteLine("\t1 задача помещена в очередь исполнения");
+                                Console.WriteLine(
+                                    $"\t{DateTime.Now.ToString("hh:mm")}> Задача помещена в очередь исполнения. Чат={sched.ChatId}, время={dayTimes}",
+                                    Console.ForegroundColor = ConsoleColor.Yellow);
                             }
                         }       
                 }
@@ -587,16 +614,17 @@ static class SheduleManager
 
     public static async Task StartCheckAndExecSchedules(CancellationToken cancellation)
     {
-        Console.WriteLine("Schedule monitor is stARted");
+        Console.WriteLine("Schedule monitor is stARted", Console.ForegroundColor = ConsoleColor.Green);
         try
         {
             while (!cancellation.IsCancellationRequested)
             {
-                Console.WriteLine("> Check schedule queue");
                 while (SchedulesToImmediatlyOperate.Any())
                 {
                     var sched = SchedulesToImmediatlyOperate.Dequeue();
-                    Console.WriteLine("\tисполнение 1 элемента очереди");
+                    Console.WriteLine(
+                                    $"\t{DateTime.Now.ToString("hh:mm")}> Исполнение задачи из очереди. Чат={sched.ChatId}",
+                                    Console.ForegroundColor = ConsoleColor.DarkYellow);
 
                     string answ = sched.ExecuteOperation.Invoke();
                     await TBot.SendMessage(sched.ChatId, answ);
@@ -604,10 +632,11 @@ static class SheduleManager
 
                 //if (_Schedules.Count != 0) SaveSchedules(_Schedules); //Access to the path 'D:\Projects\VS\TSI_Monitor\TSI_Monitor\bin\Release\net8.0' is denied.
                 PushToOperateQueue();   //косяк, тут ли его вызывать? или опустить этот метод и работать только с PushToOperateQueue
+                CheckAndRemoveOldSchedules();
 
                 await Task.Delay(60 * 1000);
             }
-            Console.WriteLine("Schedule monitor is stOPped");
+            Console.WriteLine("Schedule monitor is stOPped", Console.ForegroundColor = ConsoleColor.Red);
         }
         catch (Exception ex)
         {
