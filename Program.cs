@@ -511,6 +511,32 @@ class ChatSchedule
         ScheduleDays = scheduleList;
     }
 
+    public TimeSpan GetNextTimeExecute()
+    {
+        // for old schedules return zero
+        var difference = DateTime.Now.Subtract(CreationDate).TotalHours;
+        if (IsEveryWeek && difference > 24)
+        {
+            return TimeSpan.Zero;
+        }
+
+        // далее возникает конфликт т.к. расписаний может быть несколько, но это можно опустить
+        // т.к. пока мы имеем только 1 делегат и не важно по какому расписанию он будет вызван
+        // проблема появится когда будет список делегатов, но в данном случае проще создать новый экземпляр этого класса
+
+        TimeSpan nearestTime = TimeSpan.MaxValue;
+        var currentDaySchedules = ScheduleDays.Where(x => x.DayOfWeek == DateTime.Now.DayOfWeek);
+        foreach (ScheduleTimes sched in currentDaySchedules)
+        {
+            foreach (TimeSpan timeExec in sched.Times)
+            {
+                if (timeExec > DateTime.Now.TimeOfDay && timeExec < nearestTime)
+                    nearestTime = timeExec;
+            }
+        }
+        return nearestTime;
+    }
+
     public static List<ScheduleTimes> ScheduleTemplateWeekends()
     {
         List<ScheduleTimes> template = new List<ScheduleTimes>();
