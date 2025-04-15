@@ -11,12 +11,13 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using Microsoft.Data.Sqlite;
+using static ChatSchedule;
 
 
 Console.WriteLine("Enter 'stop' for stopped the bot and scheduler\n\n");
 
 CancellationTokenSource cancTokenSource = new CancellationTokenSource();
-var task = Task.Run(() => SheduleManager.StartCheckAndExecSchedules(cancTokenSource.Token));
+var task = Task.Run(() => SheduleManager.Start(cancTokenSource.Token));
 var task2 = Task.Run(() => TBot.Start(cancTokenSource.Token));
 
 while (!cancTokenSource.IsCancellationRequested)
@@ -468,14 +469,16 @@ private static TaskCompletionSource tcs;
 
 }
 
-class ScheduleTimes
-{
-    public DayOfWeek DayOfWeek;
-    public List<TimeSpan> Times; // отсчитываем от 00:00 от начала дня.
-}
+
 
 class ChatSchedule
 {
+    public class ScheduleTimes
+    {
+        public DayOfWeek DayOfWeek;
+        public List<TimeSpan> Times; // отсчитываем от 00:00 от начала дня.
+    }
+
     public Guid Guid {  get; private set; }
     public long ChatId { get; private set; }
     public string Description { get; private set; }
@@ -511,7 +514,7 @@ class ChatSchedule
         ScheduleDays = scheduleList;
     }
 
-    public TimeSpan GetNextTimeExecute()
+    public TimeSpan GetNextExecuteTime()
     {
         // for old schedules return zero
         var difference = DateTime.Now.Subtract(CreationDate).TotalHours;
@@ -619,8 +622,11 @@ static class SheduleManager
     private static readonly string _ScheduleSavedFullFilePath = Path.Combine(_BasicFolder, _ScheduleSavedFileName);
 
     private static readonly object _lockSched = new object();
-    public static Queue<ChatSchedule> SchedulesToImmediatlyOperate = new Queue<ChatSchedule>();
+    private static List<Guid> CurrentDaySchedules = new ();
     private static List<ChatSchedule> _Schedules = LoadSchedules();
+
+    private static CancellationTokenSource CancTokenSrc_BreakWait = new ();
+
 
     public static string AddSchedules(ChatSchedule schedule)
     {
@@ -628,6 +634,7 @@ static class SheduleManager
         if (isExist) return "уже существует";
 
         _Schedules.Add(schedule);
+        CancTokenSrc_BreakWait.Cancel();
         return "создано";
     }
 
@@ -669,6 +676,8 @@ static class SheduleManager
                 _Schedules.Remove(sched);
             }
         }
+
+        if (count > 0) CancTokenSrc_BreakWait.Cancel();
         return $"Удалено {count} расписаний";
     }
 
@@ -692,41 +701,88 @@ static class SheduleManager
         }
     }
 
-    private static void PushToOperateQueue()
+    //private static void PushToOperateQueue()
+    //{
+    //    lock (_lockSched)
+    //        foreach (ChatSchedule sched in _Schedules)
+    //        {
+    //            var schedDays = sched.ScheduleDays;
+    //            foreach (ScheduleTimes day in schedDays)
+    //            {
+    //                if (day.DayOfWeek == DateTime.Now.DayOfWeek)
+    //                    foreach (TimeSpan dayTimes in day.Times)
+    //                    {
+    //                        var timeToExec = DateTime.Today + dayTimes;
+    //                        var difference = DateTime.Now.Subtract(timeToExec).TotalSeconds;
+    //                        if (difference < 80 && difference > 0)
+    //                        {
+    //                            SchedulesToImmediatlyOperate.Enqueue(sched);
+    //                            Console.WriteLine(
+    //                                $"\t{DateTime.Now.ToString("hh:mm")}> Задача помещена в очередь исполнения. Чат={sched.ChatId}, время={dayTimes}",
+    //                                Console.ForegroundColor = ConsoleColor.Yellow);
+    //                        }
+    //                    }       
+    //            }
+    //        }
+    //}
+
+    //private static void UpdateNearestScheduleTimeAndGuid(List<Guid> scheduleList)
+    //{
+    //    if (!scheduleList.Any())
+    //    {
+    //        NearestGuid = Guid.Empty;
+    //        NearestTime = TimeSpan.Zero;
+
+    //        Console.WriteLine("Нет расписаний чатов на сегодня");
+    //        return;
+    //    }
+
+    //    var nearestTime = TimeSpan.MaxValue;
+    //    var nearestGuid = Guid.Empty;
+    //    foreach (Guid guid in scheduleList)
+    //    {
+    //        var timeExec = _Schedules.Where((x) => x.Guid == guid).First();
+    //        if (timeExec.GetNextExecuteTime() > DateTime.Now.TimeOfDay && timeExec.GetNextExecuteTime() < nearestTime)
+    //        {
+    //            NearestTime = timeExec.GetNextExecuteTime();
+    //            NearestGuid = timeExec.Guid;
+    //        }
+    //    }
+    //}
+
+    //private static Guid NearestGuid = Guid.Empty;
+    //private static TimeSpan NearestTime = TimeSpan.MaxValue;
+
+    private static List<Guid> GetCurrentDaySchedules()
     {
+        List<Guid> currentDaySchedules = new();
         lock (_lockSched)
-            foreach (ChatSchedule sched in _Schedules)
-            {
-                var schedDays = sched.ScheduleDays;
-                foreach (ScheduleTimes day in schedDays)
-                {
-                    if (day.DayOfWeek == DateTime.Now.DayOfWeek)
-                        foreach (TimeSpan dayTimes in day.Times)
-                        {
-                            var timeToExec = DateTime.Today + dayTimes;
-                            var difference = DateTime.Now.Subtract(timeToExec).TotalSeconds;
-                            if (difference < 80 && difference > 0)
-                            {
-                                SchedulesToImmediatlyOperate.Enqueue(sched);
-                                Console.WriteLine(
-                                    $"\t{DateTime.Now.ToString("hh:mm")}> Задача помещена в очередь исполнения. Чат={sched.ChatId}, время={dayTimes}",
-                                    Console.ForegroundColor = ConsoleColor.Yellow);
-                            }
-                        }       
-                }
-            }
+            currentDaySchedules = _Schedules
+                .Where(x => x.ScheduleDays
+                    .Any(y => y.DayOfWeek == DateTime.Now.DayOfWeek))
+                .OrderBy(z => z.GetNextExecuteTime())
+                .Select(z => z.Guid)
+                .ToList();
+        
+        return currentDaySchedules;
     }
 
-    public static async Task StartCheckAndExecSchedules(CancellationToken cancellation)
+    public static async Task Start(CancellationToken cancellation)
     {
         Console.WriteLine("Schedule monitor is stARted", Console.ForegroundColor = ConsoleColor.Green);
         try
         {
             while (!cancellation.IsCancellationRequested)
             {
-                while (SchedulesToImmediatlyOperate.Any())
+                CancTokenSrc_BreakWait = new();
+                CurrentDaySchedules = GetCurrentDaySchedules(); // already OrderBy(z => z.GetNextExecuteTime()
+
+                if (CurrentDaySchedules.Any())
                 {
-                    var sched = SchedulesToImmediatlyOperate.Dequeue();
+                    var timeToExec = _Schedules.Where(x => x.Guid == CurrentDaySchedules[0]).First().GetNextExecuteTime();
+                    if (timeToExec > NearestTime) {
+
+                    var sched = CurrentDaySchedules.Dequeue();
                     Console.WriteLine(
                                     $"\t{DateTime.Now.ToString("hh:mm")}> Исполнение задачи из очереди. Чат={sched.ChatId}",
                                     Console.ForegroundColor = ConsoleColor.DarkYellow);
@@ -735,11 +791,9 @@ static class SheduleManager
                     await TBot.SendMessage(sched.ChatId, answ);
                 }
 
-                //if (_Schedules.Count != 0) SaveSchedules(_Schedules); //Access to the path 'D:\Projects\VS\TSI_Monitor\TSI_Monitor\bin\Release\net8.0' is denied.
-                PushToOperateQueue();   //косяк, тут ли его вызывать? или опустить этот метод и работать только с PushToOperateQueue
                 CheckAndRemoveOldSchedules();
 
-                await Task.Delay(60 * 1000);
+                await Task.Delay(60 * 1000, CancTokenSrc_BreakWait.Token);
             }
             Console.WriteLine("Schedule monitor is stOPped", Console.ForegroundColor = ConsoleColor.Red);
         }
@@ -747,6 +801,9 @@ static class SheduleManager
         {
             Console.WriteLine(ex.ToString());
         }
+
+        //if (_Schedules.Count != 0) SaveSchedules(_Schedules); //Access to the path 'D:\Projects\VS\TSI_Monitor\TSI_Monitor\bin\Release\net8.0' is denied.
+
     }
 
     public static void SaveSchedules(List<ChatSchedule> schedules)
