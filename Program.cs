@@ -780,12 +780,15 @@ static class SheduleManager
                 if (CurrentDaySchedules.Any())
                 {
                     var timeToExec = _Schedules.Where(x => x.Guid == CurrentDaySchedules[0]).First().GetNextExecuteTime();
-                    if (timeToExec > NearestTime) {
 
-                    var sched = CurrentDaySchedules.Dequeue();
-                    Console.WriteLine(
-                                    $"\t{DateTime.Now.ToString("hh:mm")}> Исполнение задачи из очереди. Чат={sched.ChatId}",
-                                    Console.ForegroundColor = ConsoleColor.DarkYellow);
+                    // ????
+
+                    //if (timeToExec > NearestTime) {
+
+                    //var sched = CurrentDaySchedules.Dequeue();
+                    //Console.WriteLine(
+                    //                $"\t{DateTime.Now.ToString("hh:mm")}> Исполнение задачи из очереди. Чат={sched.ChatId}",
+                    //                Console.ForegroundColor = ConsoleColor.DarkYellow);
 
                     string answ = sched.ExecuteOperation.Invoke();
                     await TBot.SendMessage(sched.ChatId, answ);
