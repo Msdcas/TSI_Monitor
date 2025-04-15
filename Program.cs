@@ -265,14 +265,15 @@ private static TaskCompletionSource tcs;
     {
         try
         {
-            if (Contains(BlackChatsId, update.Message.Chat.Id))
-            {
-                return;
-            }
-
             switch (update.Type)
             {
                 case UpdateType.Message:
+
+                    if (Contains(BlackChatsId, update.Message.Chat.Id))
+                    {
+                        return;
+                    }
+
                     switch (update.Message.Type)
                     {
                         case MessageType.Text:
@@ -374,26 +375,29 @@ private static TaskCompletionSource tcs;
 
         if (user.Id == AdminChatId)
         {
-            long newChatId = long.Parse(update.CallbackQuery.Data.Replace("addChat_", ""));
-            if (callback.Data.StartsWith("addChat_"))
+            long newChatId;
+            if (long.TryParse(update.CallbackQuery.Data.Replace("addChat_", ""), out newChatId))
             {
-                WhiteChatsId.Add(newChatId);
+                if (callback.Data.StartsWith("addChat_"))
+                {
+                    WhiteChatsId.Add(newChatId);
 
-                await botClient.SendMessage(newChatId, $"You have been added to the WHITE list");
-                //Console.WriteLine($"add new chat {newChatId}");
-                //await botClient.AnswerCallbackQuery(callback.Id, $"Чат {newChatId} добавлен в белый список");
-                await botClient.SendMessage(AdminChatId, $"Чат {newChatId} добавлен в белый список");
-                await botClient.DeleteMessage(AdminChatId, update.CallbackQuery.Message.Id);
-            }
+                    await botClient.SendMessage(newChatId, $"You have been added to the WHITE list");
+                    //Console.WriteLine($"add new chat {newChatId}");
+                    //await botClient.AnswerCallbackQuery(callback.Id, $"Чат {newChatId} добавлен в белый список");
+                    await botClient.SendMessage(AdminChatId, $"Чат {newChatId} добавлен в белый список");
+                    await botClient.DeleteMessage(AdminChatId, update.CallbackQuery.Message.Id);
+                }
 
-            if (callback.Data.StartsWith("ignChat_"))
-            {
-                BlackChatsId.Add(newChatId);
-                await botClient.DeleteMessage(AdminChatId, update.CallbackQuery.Message.Id);
-                await botClient.SendMessage(newChatId, $"You have been added to the BLACK list");
-            }
+                if (callback.Data.StartsWith("ignChat_"))
+                {
+                    BlackChatsId.Add(newChatId);
+                    await botClient.DeleteMessage(AdminChatId, update.CallbackQuery.Message.Id);
+                    await botClient.SendMessage(newChatId, $"You have been added to the BLACK list");
+                }
 
                 return;
+            }
         }
 
         string answ = null;
@@ -433,7 +437,7 @@ private static TaskCompletionSource tcs;
 
             //scheduleGetImmediatly
             case "mbut5":
-                await botClient.AnswerCallbackQuery(callback.Id, SeleniumMonitorTSI.GetOpenTSITickets());
+                await botClient.AnswerCallbackQuery(callback.Id, SeleniumMonitorTSI.GetOpenTSITickets());  //Telegram Bot API error 400: Bad Request: MESSAGE_TOO_LONG
                 //await botClient.SendMessage(chat.Id, answ);
                 break;
 
@@ -511,7 +515,7 @@ class ChatSchedule
         ScheduleDays = scheduleList;
     }
 
-    public TimeSpan GetNextTimeExecute()
+    public TimeSpan GetNextExecuteTime()
     {
         // for old schedules return zero
         var difference = DateTime.Now.Subtract(CreationDate).TotalHours;
