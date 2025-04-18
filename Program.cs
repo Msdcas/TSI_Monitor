@@ -305,7 +305,9 @@ class TBot
 
         string answ = null;
         ChatSchedule temp;
-        switch (message.Text)
+
+        var command = message.Text.Replace($"@{_botClient.GetMe().Result.Username}", "");
+        switch (command)
         {
             case "/start":
                 await botClient.SendMessage(
@@ -799,9 +801,9 @@ static class SheduleManager
         }
         catch (Exception ex)
         {
-            Log.Logger.Error("Ошибка сохранеения расписаний в файл: " + ex.ToString());
+            Log.Logger.Error("Ошибка сохранения массива расписаний в файл: " + ex.ToString());
         }
-        Log.Logger.Info("Сохранение расписаний в файл");
+        Log.Logger.Info("Сохранение массива расписаний в файл");
     }
 
     private static List<ChatSchedule> LoadSchedules()
