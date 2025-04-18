@@ -15,6 +15,8 @@ using NLog;
 using NLog.Config;
 using NLog.Targets;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
+using System.Text;
 
 
 Log.Initialize();
@@ -32,6 +34,10 @@ while (!cancTokenSource.IsCancellationRequested)
     {
         cancTokenSource.Cancel();
         TBot.Stop();
+    }
+    else
+    {
+        Console.WriteLine("Command not found. Available commands: 'stop'\n");
     }
 }
 
@@ -414,12 +420,13 @@ private static TaskCompletionSource tcs;
             }
         }
 
+        // через AnswerCallbackQuery нельзя передавать слоишком длинные строки. => передаем статус и короткие строки
+
         string answ = null;
         ChatSchedule temp;
         switch (callback.Data)
         {
             //mainInlineKeyboard operations and answers
-
             //showCurrentChatSchedules
             case "mbut1":
                 answ = SheduleManager.GetChatSchedules(chat.Id);
@@ -451,8 +458,8 @@ private static TaskCompletionSource tcs;
 
             //scheduleGetImmediatly
             case "mbut5":
-                await botClient.AnswerCallbackQuery(callback.Id, SeleniumMonitorTSI.GetOpenTSITickets());  //Telegram Bot API error 400: Bad Request: MESSAGE_TOO_LONG
-                //await botClient.SendMessage(chat.Id, answ);
+                await botClient.SendMessage(chat.Id, SeleniumMonitorTSI.GetOpenTSITickets());
+                await botClient.AnswerCallbackQuery(callback.Id, "Запрос выполнен");  //Telegram Bot API error 400: Bad Request: MESSAGE_TOO_LONG
                 break;
 
             default:
@@ -844,36 +851,69 @@ class KeyboardHelper
 
 }
 
-
 static class Log
 {
     public static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     public static void Initialize()
     {
-        LoggingConfiguration config = new LoggingConfiguration();
-        ConsoleTarget consoleTarget = new ConsoleTarget
-        {
-            Name = "console",
-            Layout = "${longdate}|${level:uppercase=true}|${logger}|${message}",
-        };
-        config.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, consoleTarget, "*");
-        var test = LogManager.Configuration = config;
-
-
         try
         {
             LogManager.LoadConfiguration("nlog.config");
-            Logger.Info("Логгер успешно инициализирован.");
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Ошибка инициализации логгера: " + ex.Message);
-            Logger.Error(ex, "Ошибка инициализации логгера.");
+            Console.WriteLine("Logger error initialization: " + ex.Message);
+            Logger.Error(ex, "Logger error initialization");
         }
     }
 
 }
 
+public class AesEncryption
+{
+    private static readonly byte[] Key = Encoding.UTF8.GetBytes("Your16ByteKey!"); // 16 байт для AES-128
+    private static readonly byte[] IV = Encoding.UTF8.GetBytes("Your16ByteIV!!"); // 16 байт для IV
 
+    public static string Encrypt(string plainText)
+    {
+        using (Aes aes = Aes.Create())
+        {
+            aes.Key = Key;
+            aes.IV = IV;
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (CryptoStream cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+                {
+                    using (StreamWriter sw = new StreamWriter(cs))
+                    {
+                        sw.Write(plainText);
+                    }
+                    return Convert.ToBase64String(ms.ToArray());
+                }
+            }
+        }
+    }
+
+    public static string Decrypt(string cipherText)
+    {
+        using (Aes aes = Aes.Create())
+        {
+            aes.Key = Key;
+            aes.IV = IV;
+
+            using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(cipherText)))
+            {
+                using (CryptoStream cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read))
+                {
+                    using (StreamReader sr = new StreamReader(cs))
+                    {
+                        return sr.ReadToEnd();
+                    }
+                }
+            }
+        }
+    }
+}
 
 
