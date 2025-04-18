@@ -11,13 +11,19 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using Microsoft.Data.Sqlite;
+using NLog;
+using NLog.Config;
+using NLog.Targets;
+using Microsoft.Extensions.Logging;
 
 
-Console.WriteLine("Enter 'stop' for stopped the bot and scheduler\n\n");
+Log.Initialize();
+
+Log.Logger.Info("Starting... Enter 'stop' for stopped the bot and the scheduler\n", new { Color = "green" });
 
 CancellationTokenSource cancTokenSource = new CancellationTokenSource();
-var task = Task.Run(() => SheduleManager.StartCheckAndExecSchedules(cancTokenSource.Token));
-var task2 = Task.Run(() => TBot.Start(cancTokenSource.Token));
+var schedTask = Task.Run(() => SheduleManager.StartCheckAndExecSchedules(cancTokenSource.Token));
+var botTask = Task.Run(() => TBot.Start(cancTokenSource.Token));
 
 while (!cancTokenSource.IsCancellationRequested)
 {
@@ -28,6 +34,10 @@ while (!cancTokenSource.IsCancellationRequested)
         TBot.Stop();
     }
 }
+
+
+//проверять состояние тасков и выдавать результат если кто то умер
+// изменить привязку к админу не через его чат ид, а через ид собеседника
 
 // изменить логику работы шедулера. добавить уникальные ИД в список шедулера
 //в шедулер добавить метод GetNetxtime и расчитывать минимальное время до запуска, от которого расчитывать период делея в таске
@@ -62,6 +72,8 @@ static class SeleniumMonitorTSI
         DataTable TicketsDTable = InitializeTable();
         try
         {
+            Log.Logger.Info("Запущен метод SeleniumMonitorTSI.GetOpenTSITickets");
+
             ChromeOptions chromeOptions = new ChromeOptions();
             ChromeDriverService driverService = ChromeDriverService.CreateDefaultService();
 
@@ -105,13 +117,15 @@ static class SeleniumMonitorTSI
         }
         catch (Exception ex)
         {
-            return ex.ToString();
+            Log.Logger.Error("Ошибка в методе  SeleniumMonitorTSI.GetOpenTSITickets: " + ex.ToString());
+            return "Возникла ошибка. Смотрите лог файл";
         }
         finally
         {
             driver.Close();
             driver.Quit();
         }
+        Log.Logger.Info("Успешно завершен метод SeleniumMonitorTSI.GetOpenTSITickets");
         return ConvertToString(TicketsDTable);
     }
 
@@ -225,12 +239,12 @@ private static TaskCompletionSource tcs;
         _botClient.StartReceiving(UpdateHandler, ErrorHandler, _receiverOptions, cancellation);
 
         var me = await _botClient.GetMe();
-        Console.WriteLine($"Bot {me.FirstName} is stARted", Console.ForegroundColor = ConsoleColor.Green);
+        Log.Logger.Info($"Bot {me.FirstName} is stARted", new { Color = "green" });
 
         await tcs.Task;
         tcs = null;
 
-        Console.WriteLine($"Bot {me.FirstName} is stOPped", Console.ForegroundColor = ConsoleColor.Red);
+        Log.Logger.Info($"Bot {me.FirstName} is stOPped", new { Color = "red" });
     }
 
     public static void Stop()
@@ -241,7 +255,7 @@ private static TaskCompletionSource tcs;
         }
         catch
         {
-            throw new InvalidOperationException("Bot is not running.");
+            Log.Logger.Error("Bot is not running.");
         }
     }
 
@@ -253,11 +267,11 @@ private static TaskCompletionSource tcs;
         {
             var result = await botClient.SendTextMessageAsync(chatId, message);
 
-            Console.WriteLine($"Сообщение отправлено: {result.Text}");
+            Log.Logger.Debug($"Сообщение отправлено: {result.Text}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при отправке сообщения: {ex.Message}");
+            Log.Logger.Debug($"Ошибка при отправке сообщения: {ex.Message}");
         }
     }
 
@@ -291,7 +305,7 @@ private static TaskCompletionSource tcs;
         }
         catch (Exception ex)
         {
-            Console.WriteLine(ex.ToString());
+            Log.Logger.Error(ex.ToString());
         }
     }
 
@@ -304,12 +318,12 @@ private static TaskCompletionSource tcs;
             await botClient.SendMessage(AdminChatId,
                 $"Новый чат, id={update.Message.From},msg={update.Message.Text}",
                 replyMarkup: KeyboardHelper.GetInlineKbr_IsAddNewChat(update.Message.Chat.Id.ToString()));
-            
-            Console.WriteLine($"Drop msg from chat_id={update.Message.Id.ToString()}");
+
+            Log.Logger.Debug($"Drop text msg from chat_id={update.Message.Id.ToString()}");
             return;
         }
 
-        Console.WriteLine($"msg={update.Message.Text}, chat_id={update.Message.Chat.Id}");
+        Log.Logger.Debug($"Handle new text msg={update.Message.Text}, chat_id={update.Message.Chat.Id}");
 
 
         string answ = null;
@@ -371,7 +385,7 @@ private static TaskCompletionSource tcs;
         var user = callback.From;
         var chat = callback.Message.Chat;
 
-        //Console.WriteLine($"str={callback.Data}, chat_id={chat.Id}");
+        //Log.Logger.Debug($"str={callback.Data}, chat_id={chat.Id}");
 
         if (user.Id == AdminChatId)
         {
@@ -383,7 +397,7 @@ private static TaskCompletionSource tcs;
                     WhiteChatsId.Add(newChatId);
 
                     await botClient.SendMessage(newChatId, $"You have been added to the WHITE list");
-                    //Console.WriteLine($"add new chat {newChatId}");
+                    //Log.Logger.Debug($"add new chat {newChatId}");
                     //await botClient.AnswerCallbackQuery(callback.Id, $"Чат {newChatId} добавлен в белый список");
                     await botClient.SendMessage(AdminChatId, $"Чат {newChatId} добавлен в белый список");
                     await botClient.DeleteMessage(AdminChatId, update.CallbackQuery.Message.Id);
@@ -444,7 +458,7 @@ private static TaskCompletionSource tcs;
             default:
                 break;
         }
-        //Console.WriteLine(answ);
+        //Log.Logger.Debug(answ);
     }
 
     private static Task ErrorHandler(ITelegramBotClient botClient, Exception error, CancellationToken cancellationToken)
@@ -457,7 +471,7 @@ private static TaskCompletionSource tcs;
             _ => error.ToString()
         };
 
-        Console.WriteLine(ErrorMessage);
+        Log.Logger.Error("TBot_ErorrHandler:: " + ErrorMessage);
         return Task.CompletedTask;
     }
 
@@ -631,6 +645,7 @@ static class SheduleManager
         var isExist = _Schedules.Where(x => x.ChatId == schedule.ChatId && x.Description == schedule.Description).Count() != 0;
         if (isExist) return "уже существует";
 
+        Log.Logger.Info($"Создано расписание. Чат={schedule.ChatId}.Расписание={schedule.Description}");
         _Schedules.Add(schedule);
         return "создано";
     }
@@ -644,11 +659,12 @@ static class SheduleManager
         lock (_lockSched)
             matchedSchedules = _Schedules.Where(x => x.ChatId == chatId).ToList();
 
-        //Console.WriteLine($"Найдено расписаний: {matchedSchedules.Count}");
+        
 
         if (matchedSchedules.Any())
             answ = string.Join("\n", matchedSchedules.Select(s => s.Description));
 
+        Log.Logger.Debug($"Выполнен запрос текущих расписаний для чата: {chatId}. Найдно расписаний: {matchedSchedules.Count}");
         return answ;
     }
 
@@ -673,6 +689,7 @@ static class SheduleManager
                 _Schedules.Remove(sched);
             }
         }
+        Log.Logger.Info($"Выполнен запрос удаления расписаний для чата: {chatId}. Удалено расписаний: {count}");
         return $"Удалено {count} расписаний";
     }
 
@@ -694,6 +711,7 @@ static class SheduleManager
                 _Schedules.Remove(sched);
             }
         }
+        Log.Logger.Debug($"Выполнение системного события. Удалено старых расписаний: {schedulesToRemove.Count}");
     }
 
     private static void PushToOperateQueue()
@@ -712,9 +730,7 @@ static class SheduleManager
                             if (difference < 80 && difference > 0)
                             {
                                 SchedulesToImmediatlyOperate.Enqueue(sched);
-                                Console.WriteLine(
-                                    $"\t{DateTime.Now.ToString("hh:mm")}> Задача помещена в очередь исполнения. Чат={sched.ChatId}, время={dayTimes}",
-                                    Console.ForegroundColor = ConsoleColor.Yellow);
+                                Log.Logger.Debug($"Задача помещена в очередь исполнения. Чат={sched.ChatId}, время={dayTimes}");
                             }
                         }       
                 }
@@ -723,7 +739,7 @@ static class SheduleManager
 
     public static async Task StartCheckAndExecSchedules(CancellationToken cancellation)
     {
-        Console.WriteLine("Schedule monitor is stARted", Console.ForegroundColor = ConsoleColor.Green);
+        Log.Logger.Info("Schedule monitor is stARted", new { Color = "green" });
         try
         {
             while (!cancellation.IsCancellationRequested)
@@ -731,9 +747,7 @@ static class SheduleManager
                 while (SchedulesToImmediatlyOperate.Any())
                 {
                     var sched = SchedulesToImmediatlyOperate.Dequeue();
-                    Console.WriteLine(
-                                    $"\t{DateTime.Now.ToString("hh:mm")}> Исполнение задачи из очереди. Чат={sched.ChatId}",
-                                    Console.ForegroundColor = ConsoleColor.DarkYellow);
+                    Log.Logger.Debug($"Выполнение задачи расписания для чата={sched.ChatId}");
 
                     string answ = sched.ExecuteOperation.Invoke();
                     await TBot.SendMessage(sched.ChatId, answ);
@@ -745,11 +759,11 @@ static class SheduleManager
 
                 await Task.Delay(60 * 1000);
             }
-            Console.WriteLine("Schedule monitor is stOPped", Console.ForegroundColor = ConsoleColor.Red);
+            Log.Logger.Info("Schedule monitor is stOPped", new { Color = "red" });
         }
         catch (Exception ex)
         {
-            Console.WriteLine(ex.ToString());
+            Log.Logger.Error("Ошибка в StartCheckAndExecSchedules" + ex.ToString());
         }
     }
 
@@ -760,6 +774,8 @@ static class SheduleManager
         lock (_lockSched)
             json = JsonSerializer.Serialize(schedules);
         File.WriteAllText(_BasicFolder, json);
+
+        Log.Logger.Info("Сохранение расписаний в файл");
     }
 
     private static List<ChatSchedule> LoadSchedules()
@@ -773,7 +789,7 @@ static class SheduleManager
         var scheduleList = JsonSerializer.Deserialize<List<ChatSchedule>>(json);
 
         if (scheduleList != null && scheduleList.Count > 0)
-            Console.WriteLine($"Восстановлено {scheduleList.Count} расписаний");
+            Log.Logger.Info("Восстановление расписаний из файла");
 
         return new List<ChatSchedule>(scheduleList);
     }
@@ -828,8 +844,33 @@ class KeyboardHelper
 
 }
 
+
 static class Log
 {
+    public static readonly Logger Logger = LogManager.GetCurrentClassLogger();
+    public static void Initialize()
+    {
+        LoggingConfiguration config = new LoggingConfiguration();
+        ConsoleTarget consoleTarget = new ConsoleTarget
+        {
+            Name = "console",
+            Layout = "${longdate}|${level:uppercase=true}|${logger}|${message}",
+        };
+        config.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, consoleTarget, "*");
+        var test = LogManager.Configuration = config;
+
+
+        try
+        {
+            LogManager.LoadConfiguration("nlog.config");
+            Logger.Info("Логгер успешно инициализирован.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Ошибка инициализации логгера: " + ex.Message);
+            Logger.Error(ex, "Ошибка инициализации логгера.");
+        }
+    }
 
 }
 
